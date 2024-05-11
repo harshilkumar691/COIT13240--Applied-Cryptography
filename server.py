@@ -2,7 +2,6 @@
 TCP server for kex exchange and authenticated encryption
 '''
 import argparse
-from tcpclientserver import TCPServer
 import logging
 
 logger = logging.getLogger("DEMO_SERVER")
