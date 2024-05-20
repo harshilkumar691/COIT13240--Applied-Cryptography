@@ -1,5 +1,5 @@
 '''
-TCP server for kex exchange and authenticated encryption
+TCP server for key exchange and authenticated encryption
 '''
 import argparse
 from tcpclientserver import TCPServer
@@ -15,52 +15,42 @@ def server_protocol(server):
     :returns: Message to be sent to client
     '''
 
-    message_to_receive = True
-    while message_to_receive:
+    prompts = ["name:", "unit name:"]
+    responses = []
 
-        # Pre-process received message
+    for prompt in prompts:
+        # Send prompt to client
+        tx_message = "PROMPT:" + prompt
+        server.send(tx_message)
+
+        # Receive response from client
         rx_message = server.recv()
         rx_message_fields = rx_message.split(":")
         rx_message_type = rx_message_fields[0]
         rx_message_data = rx_message_fields[1]
         logger.debug("Received: %s", rx_message)
-        
-        # Check message type and process
-        if rx_message_type == "101":
-            tx_message_type = "201"
-            tx_message_data = "Thank you for the 1st message."            
-            
-        elif rx_message_type == "102":
-            tx_message_type = "202"
-            tx_message_data = "Good bye"
-            message_to_receive = False
-            
-        else:
-            logger.error(
-                "Received unknown or incorrect message type: %s",
-                rx_message_type)
-            message_to_receive = False
+
+        if rx_message_type != "RESPONSE":
+            logger.error("Received unknown or incorrect message type: %s", rx_message_type)
             return 1
 
-        # Send response
-        tx_message = tx_message_type + ":" + tx_message_data
-        server.send(tx_message)
+        responses.append(rx_message_data)
 
-    # End while
+    # Send final message to client
+    tx_message = f"INFO:{responses[0]} has been added to the unit {responses[1]}."
+    server.send(tx_message)
 
     return 0
 
 
 if __name__ == '__main__':
-
     logging.basicConfig(level=logging.DEBUG)
 
     # Read the command line arguments using argparse module
     parser = argparse.ArgumentParser()
 
     # Add command line arguments
-    parser.add_argument("port", type=int,
-                        help="port of server")
+    parser.add_argument("port", type=int, help="port of server")
 
     # Read and parse the command line arguments
     args = parser.parse_args()
@@ -73,12 +63,11 @@ if __name__ == '__main__':
 
     # The server continues forever, accepting connections from clients
     while True:
-
         # Blocks until client initiates a connection
         server.accept()
 
         # Process messages
         server_protocol(server)
 
-    # Close the data socket and wait for more clients to connect
-    server.close()
+        # Close the data socket and wait for more clients to connect
+        server.close()
