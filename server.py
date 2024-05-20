@@ -4,6 +4,7 @@ TCP server for key exchange and authenticated encryption
 import argparse
 from tcpclientserver import TCPServer
 import logging
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import dh
@@ -52,6 +53,10 @@ def server_protocol(server):
 
     # Receive client's public key
     client_public_bytes = server.recv()
+    if client_public_bytes is None:
+        logger.error("Failed to receive client's public key")
+        return 1
+
     client_public_key = serialization.load_pem_public_key(client_public_bytes.encode('utf-8'), backend=default_backend())
 
     # Generate shared secret
@@ -69,6 +74,10 @@ def server_protocol(server):
 
             # Receive response from client
             encrypted_rx_message = bytes.fromhex(server.recv())
+            if encrypted_rx_message is None:
+                logger.error("Failed to receive client's response")
+                return 1
+
             rx_message = decrypt_message(derived_key, encrypted_rx_message)
             rx_message_fields = rx_message.split(":")
             rx_message_type = rx_message_fields[0]
