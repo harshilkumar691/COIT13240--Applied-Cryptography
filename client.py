@@ -6,7 +6,7 @@ from tcpclientserver import TCPClient
 import logging
 import os
 from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_public_key
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -25,7 +25,7 @@ def diffie_hellman_key_exchange(client):
     client.send(client_public_key_bytes.decode())
 
     server_public_key_bytes = client.recv().encode()
-    server_public_key = serialization.load_pem_public_key(server_public_key_bytes, backend=default_backend())
+    server_public_key = load_pem_public_key(server_public_key_bytes, backend=default_backend())
 
     shared_key = client_private_key.exchange(server_public_key)
     derived_key = HKDF(algorithm=SHA256(), length=32, salt=None, info=b'handshake data', backend=default_backend()).derive(shared_key)
@@ -75,4 +75,43 @@ def client_protocol(client, shared_key):
 
             # Send response to server
             tx_message = "RESPONSE:" + user_response
-            encrypted_tx_message = encrypt_message(shared
+            encrypted_tx_message = encrypt_message(shared_key, tx_message)
+            client.send(encrypted_tx_message.hex())
+
+        elif rx_message_type == "INFO":
+            print(rx_message_data)
+            break
+
+        else:
+            logger.error("Received unknown or incorrect message type: %s", rx_message_type)
+            return 1
+
+    return 0
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+
+    # Read the command line arguments using argparse module
+    parser = argparse.ArgumentParser()
+
+    # Add command line arguments
+    parser.add_argument("ip", help="IPv4 address of server")
+    parser.add_argument("port", type=int, help="port of server")
+
+    # Read and parse the command line arguments
+    args = parser.parse_args()
+
+    # Create a TCPClient object
+    client = TCPClient()
+
+    # Connect to the TCP server at the specified IP/port
+    client.connect(args.ip, args.port)
+
+    # Perform Diffie-Hellman key exchange
+    shared_key = diffie_hellman_key_exchange(client)
+
+    # Communicate with the server
+    status = client_protocol(client, shared_key)
+
+    # Close connection to server
+    client.close()
