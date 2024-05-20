@@ -6,7 +6,7 @@ from tcpclientserver import TCPServer
 import logging
 import os
 from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_public_key
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -25,7 +25,7 @@ def diffie_hellman_key_exchange(server):
     server.send(server_public_key_bytes.decode())
 
     client_public_key_bytes = server.recv().encode()
-    client_public_key = serialization.load_pem_public_key(client_public_key_bytes, backend=default_backend())
+    client_public_key = load_pem_public_key(client_public_key_bytes, backend=default_backend())
 
     shared_key = server_private_key.exchange(client_public_key)
     derived_key = HKDF(algorithm=SHA256(), length=32, salt=None, info=b'handshake data', backend=default_backend()).derive(shared_key)
@@ -104,35 +104,4 @@ def server_protocol(server, shared_key):
 
     return 0
 
-
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-
-    # Read the command line arguments using argparse module
-    parser = argparse.ArgumentParser()
-
-    # Add command line arguments
-    parser.add_argument("port", type=int, help="port of server")
-
-    # Read and parse the command line arguments
-    args = parser.parse_args()
-
-    # Create a TCPServer object
-    server = TCPServer()
-
-    # Specify the port for the server to listen on
-    server.listen(args.port)
-
-    # The server continues forever, accepting connections from clients
-    while True:
-        # Blocks until client initiates a connection
-        server.accept()
-
-        # Perform Diffie-Hellman key exchange
-        shared_key = diffie_hellman_key_exchange(server)
-
-        # Process messages
-        server_protocol(server, shared_key)
-
-        # Close the data socket and wait for more clients to connect
-        server.close()
