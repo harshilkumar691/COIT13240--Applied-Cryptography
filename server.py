@@ -1,102 +1,133 @@
 import argparse
 import logging
 from tcpclientserver import TCPServer
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.primitives.serialization import Encoding, ParameterFormat
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.kdf.concatkdf import ConcatKDFHash
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
 import os
 
 logger = logging.getLogger("DEMO_SERVER")
 
-def derive_key(shared_key: bytes) -> bytes:
-    """Derive a secure key from the shared key using HKDF."""
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=None,
-        info=b'handshake data',
-        backend=default_backend()
-    )
-    return hkdf.derive(shared_key)
+def server_protocol(server, shared_key):
+    '''
+    Process the received request and create a response
+    :param server: socket used by server
+    :param shared_key: shared key for encryption/decryption
+    '''
+
+    prompts = ["name:", "id number:", "unit name:"]
+    responses = {}
+
+    for prompt in prompts:
+        while True:
+            # Send prompt to client
+            encrypted_prompt = encrypt_message(shared_key, prompt)
+            server.send(encrypted_prompt)
+
+            # Receive response from client
+            encrypted_response = server.recv()
+            response = decrypt_message(shared_key, encrypted_response)
+            if response:
+                responses[prompt] = response
+                break
+            else:
+                # Notify client to enter the details for the empty field
+                server.send(encrypt_message(shared_key, f"Please enter {prompt}"))
+
+    # Write details to a file
+    with open("student_details.txt", "a") as file:
+        for key, value in responses.items():
+            file.write(f"{key} {value}\n")
+
+    # Send final message to client
+    final_message = f"{responses['name:']} has been added to the unit {responses['unit name:']}."
+    encrypted_final_message = encrypt_message(shared_key, final_message)
+    server.send(encrypted_final_message)
+
+def generate_shared_key(private_key, public_key):
+    '''
+    Generate shared key using ECDH
+    :param private_key: private key
+    :param public_key: public key received from the client
+    :return: shared key
+    '''
+    shared_key = private_key.exchange(ec.ECDH(), public_key)
+    return shared_key
 
 def encrypt_message(key, plaintext):
-    """Encrypt a message using AES in CBC mode."""
+    '''
+    Encrypt a message using AES in CBC mode
+    :param key: encryption key
+    :param plaintext: message to be encrypted
+    :return: ciphertext
+    '''
     iv = os.urandom(16)
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
     encryptor = cipher.encryptor()
-    padder = padding.PKCS7(algorithms.AES.block_size).padder()
-    padded_data = padder.update(plaintext.encode()) + padder.finalize()
-    ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+    ciphertext = encryptor.update(plaintext.encode()) + encryptor.finalize()
     return iv + ciphertext
 
 def decrypt_message(key, ciphertext):
-    """Decrypt a message using AES in CBC mode."""
+    '''
+    Decrypt a message using AES in CBC mode
+    :param key: decryption key
+    :param ciphertext: ciphertext to be decrypted
+    :return: plaintext
+    '''
     iv = ciphertext[:16]
     ciphertext = ciphertext[16:]
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
     decryptor = cipher.decryptor()
-    padded_data = decryptor.update(ciphertext) + decryptor.finalize()
-    unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
-    plaintext = unpadder.update(padded_data) + unpadder.finalize()
+    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
     return plaintext.decode()
-
-def server_protocol(server, key):
-    details = {"name": None, "id": None, "unit": None}
-    
-    prompts = [("name", "Enter name:"), ("id", "Enter ID number:"), ("unit", "Enter unit name:")]
-
-    for field, prompt in prompts:
-        server.send(encrypt_message(key, prompt))
-        response = decrypt_message(key, server.recv())
-        if not response:
-            server.send(encrypt_message(key, f"Please enter your {field}."))
-            response = decrypt_message(key, server.recv())
-        details[field] = response
-        logger.debug(f"Received {field}: {response}")
-
-    with open("students.txt", "a") as file:
-        file.write(f"Name: {details['name']}, ID: {details['id']}, Unit: {details['unit']}\n")
-
-    confirmation_msg = f"{details['name']} has been added to the unit {details['unit']}."
-    server.send(encrypt_message(key, confirmation_msg))
-    logger.debug(confirmation_msg)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
+
+    # Read the command line arguments using argparse module
     parser = argparse.ArgumentParser()
+
+    # Add command line arguments
     parser.add_argument("port", type=int, help="port of server")
+
+    # Read and parse the command line arguments
     args = parser.parse_args()
 
-    # Diffie-Hellman key exchange setup
-    parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
-    server_private_key = parameters.generate_private_key()
-    server_public_key = server_private_key.public_key()
-    
+    # Create a TCPServer object
     server = TCPServer()
-    server.listen(args.port)
-    logger.info(f"Server listening on port {args.port}")
 
+    # Specify the port for the server to listen on
+    server.listen(args.port)
+
+    # Diffie-Hellman parameters setup
+    parameters = ec.generate_parameters(ec.SECP384R1(), default_backend())
+    private_key = parameters.generate_private_key()
+    public_key = private_key.public_key()
+
+    # The server continues forever, accepting connections from clients
     while True:
+        # Blocks until client initiates a connection
         server.accept()
         logger.info("Client connected.")
-        
+
         # Send server's public key to the client
-        server_public_bytes = server_public_key.public_bytes(Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        server_public_bytes = public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         server.send(server_public_bytes.decode())
 
         # Receive client's public key
         client_public_bytes = server.recv().encode()
-        client_public_key = serialization.load_pem_public_key(client_public_bytes, backend=default_backend())
-        
+        client_public_key = serialization.load_pem_public_key(client_public_bytes, default_backend())
+
         # Generate shared key
-        shared_key = server_private_key.exchange(client_public_key)
-        key = derive_key(shared_key)
-        
-        # Handle client-server protocol
-        server_protocol(server, key)
-        
+        shared_key = generate_shared_key(private_key, client_public_key)
+
+        # Process messages
+        server_protocol(server, shared_key)
+
+        # Close the data socket and wait for more clients to connect
         server.close()
