@@ -17,43 +17,32 @@ def client_protocol(client, server_ip, server_port):
     :returns: 0 if success
     '''
 
-    # Initialise 1st message from client
-    tx_message_type = "101"
-    tx_message_data = "Hello"
-
-    message_to_send = True
-    while message_to_send:
-        # Send message
-        tx_message = tx_message_type + ":" + tx_message_data
-        client.send(tx_message)
-       
-        # Pre-process received message
+    while True:
+        # Receive prompt from server
         rx_message = client.recv()
         rx_message_fields = rx_message.split(":")
         rx_message_type = rx_message_fields[0]
         rx_message_data = rx_message_fields[1]
         logger.debug("Received: %s", rx_message)
-        
-        # Check message type and process
-        if rx_message_type == "201":
-            tx_message_type = "102"
-            tx_message_data = "Hello again."
 
-        elif rx_message_type == "202":
-            message_to_send = False
-            
+        if rx_message_type == "PROMPT":
+            # Get user input
+            user_response = input(rx_message_data + " ")
+
+            # Send response to server
+            tx_message = "RESPONSE:" + user_response
+            client.send(tx_message)
+        elif rx_message_type == "INFO":
+            print(rx_message_data)
+            break
         else:
-            logger.error(
-                "Received unknown or incorrect message type: %s",
-                rx_message_type)
-            message_to_send = False
+            logger.error("Received unknown or incorrect message type: %s", rx_message_type)
             return 1
-  
+
     return 0
 
 
 if __name__ == '__main__':
-
     logging.basicConfig(level=logging.DEBUG)
 
     # Read the command line arguments using argparse module
@@ -61,8 +50,7 @@ if __name__ == '__main__':
 
     # Add command line arguments
     parser.add_argument("ip", help="IPv4 address of server")
-    parser.add_argument("port", type=int,
-                        help="port of server")
+    parser.add_argument("port", type=int, help="port of server")
 
     # Read and parse the command line arguments
     args = parser.parse_args()
