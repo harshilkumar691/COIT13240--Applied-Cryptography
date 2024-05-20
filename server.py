@@ -1,24 +1,67 @@
+'''
+TCP server for key exchange and authenticated encryption
+'''
 import argparse
-import logging
 from tcpclientserver import TCPServer
-from cryptography.hazmat.primitives import serialization
+import logging
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
 from cryptography.hazmat.primitives.kdf.concatkdf import ConcatKDFHash
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import os
 
 logger = logging.getLogger("DEMO_SERVER")
 
-def server_protocol(server, shared_key):
-    '''
-    Process the received request and create a response
-    :param server: socket used by server
-    :param shared_key: shared key for encryption/decryption
-    '''
+def derive_key(shared_key):
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b'handshake data',
+        backend=default_backend()
+    ).derive(shared_key)
+
+def encrypt_message(key, plaintext):
+    iv = os.urandom(16)
+    cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(plaintext.encode('utf-8')) + encryptor.finalize()
+    return iv + ciphertext
+
+def decrypt_message(key, ciphertext):
+    iv = ciphertext[:16]
+    ciphertext = ciphertext[16:]
+    cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    return plaintext.decode('utf-8')
+
+def server_protocol(server):
+    # Generate server's private key
+    parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
+    server_private_key = parameters.generate_private_key()
+    server_public_key = server_private_key.public_key()
+
+    # Send server's public key to client
+    server_public_bytes = server_public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    server.send(server_public_bytes.decode('utf-8'))
+
+    # Receive client's public key
+    client_public_bytes = server.recv()
+    client_public_key = serialization.load_pem_public_key(client_public_bytes.encode('utf-8'), backend=default_backend())
+
+    # Generate shared secret
+    shared_key = server_private_key.exchange(client_public_key)
+    derived_key = derive_key(shared_key)
 
     prompts = ["name:", "id number:", "unit name:"]
     responses = {}
@@ -26,65 +69,38 @@ def server_protocol(server, shared_key):
     for prompt in prompts:
         while True:
             # Send prompt to client
-            encrypted_prompt = encrypt_message(shared_key, prompt)
-            server.send(encrypted_prompt)
+            tx_message = encrypt_message(derived_key, "PROMPT:" + prompt)
+            server.send(tx_message.hex())
 
             # Receive response from client
-            encrypted_response = server.recv()
-            response = decrypt_message(shared_key, encrypted_response)
-            if response:
-                responses[prompt] = response
+            encrypted_rx_message = bytes.fromhex(server.recv())
+            rx_message = decrypt_message(derived_key, encrypted_rx_message)
+            rx_message_fields = rx_message.split(":")
+            rx_message_type = rx_message_fields[0]
+            rx_message_data = rx_message_fields[1].strip()
+            logger.debug("Received: %s", rx_message)
+
+            if rx_message_type != "RESPONSE":
+                logger.error("Received unknown or incorrect message type: %s", rx_message_type)
+                return 1
+
+            if rx_message_data:
+                responses[prompt] = rx_message_data
                 break
             else:
                 # Notify client to enter the details for the empty field
-                server.send(encrypt_message(shared_key, f"Please enter {prompt}"))
+                server.send(encrypt_message(derived_key, "PROMPT:Please enter " + prompt).hex())
 
     # Write details to a file
-    with open("student_details.txt", "a") as file:
+    with open("student_details.txt", "w") as file:
         for key, value in responses.items():
             file.write(f"{key} {value}\n")
 
     # Send final message to client
-    final_message = f"{responses['name:']} has been added to the unit {responses['unit name:']}."
-    encrypted_final_message = encrypt_message(shared_key, final_message)
-    server.send(encrypted_final_message)
+    tx_message = encrypt_message(derived_key, f"INFO:{responses['name:']} has been added to the unit {responses['unit name:']}.")
+    server.send(tx_message.hex())
 
-def generate_shared_key(private_key, public_key):
-    '''
-    Generate shared key using ECDH
-    :param private_key: private key
-    :param public_key: public key received from the client
-    :return: shared key
-    '''
-    shared_key = private_key.exchange(ec.ECDH(), public_key)
-    return shared_key
-
-def encrypt_message(key, plaintext):
-    '''
-    Encrypt a message using AES in CBC mode
-    :param key: encryption key
-    :param plaintext: message to be encrypted
-    :return: ciphertext
-    '''
-    iv = os.urandom(16)
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    encryptor = cipher.encryptor()
-    ciphertext = encryptor.update(plaintext.encode()) + encryptor.finalize()
-    return iv + ciphertext
-
-def decrypt_message(key, ciphertext):
-    '''
-    Decrypt a message using AES in CBC mode
-    :param key: decryption key
-    :param ciphertext: ciphertext to be decrypted
-    :return: plaintext
-    '''
-    iv = ciphertext[:16]
-    ciphertext = ciphertext[16:]
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    decryptor = cipher.decryptor()
-    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-    return plaintext.decode()
+    return 0
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
@@ -104,30 +120,13 @@ if __name__ == '__main__':
     # Specify the port for the server to listen on
     server.listen(args.port)
 
-    # Diffie-Hellman parameters setup
-    parameters = ec.generate_parameters(ec.SECP384R1(), default_backend())
-    private_key = parameters.generate_private_key()
-    public_key = private_key.public_key()
-
     # The server continues forever, accepting connections from clients
     while True:
         # Blocks until client initiates a connection
         server.accept()
-        logger.info("Client connected.")
-
-        # Send server's public key to the client
-        server_public_bytes = public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        server.send(server_public_bytes.decode())
-
-        # Receive client's public key
-        client_public_bytes = server.recv().encode()
-        client_public_key = serialization.load_pem_public_key(client_public_bytes, default_backend())
-
-        # Generate shared key
-        shared_key = generate_shared_key(private_key, client_public_key)
 
         # Process messages
-        server_protocol(server, shared_key)
+        server_protocol(server)
 
         # Close the data socket and wait for more clients to connect
         server.close()
