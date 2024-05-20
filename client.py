@@ -4,6 +4,7 @@ TCP client demo
 import argparse
 from tcpclientserver import TCPClient
 import logging
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import dh
@@ -40,6 +41,10 @@ def decrypt_message(key, ciphertext):
 def client_protocol(client, server_ip, server_port):
     # Receive server's public key
     server_public_bytes = client.recv()
+    if server_public_bytes is None:
+        logger.error("Failed to receive server's public key")
+        return 1
+
     server_public_key = serialization.load_pem_public_key(server_public_bytes.encode('utf-8'), backend=default_backend())
 
     # Generate client's private key
@@ -60,7 +65,12 @@ def client_protocol(client, server_ip, server_port):
 
     while True:
         # Receive prompt from server
-        encrypted_rx_message = bytes.fromhex(client.recv())
+        encrypted_rx_message = client.recv()
+        if encrypted_rx_message is None:
+            logger.error("Failed to receive server's message")
+            return 1
+
+        encrypted_rx_message = bytes.fromhex(encrypted_rx_message)
         rx_message = decrypt_message(derived_key, encrypted_rx_message)
         rx_message_fields = rx_message.split(":")
         rx_message_type = rx_message_fields[0]
