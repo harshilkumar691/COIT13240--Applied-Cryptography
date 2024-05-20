@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.serialization import Encoding, ParameterFormat
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 import os
 
 logger = logging.getLogger("DEMO_CLIENT")
@@ -18,13 +19,14 @@ def derive_key(shared_key: bytes) -> bytes:
         length=32,
         salt=None,
         info=b'handshake data',
+        backend=default_backend()
     )
     return hkdf.derive(shared_key)
 
 def encrypt_message(key, plaintext):
     """Encrypt a message using AES in CBC mode."""
     iv = os.urandom(16)
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
     encryptor = cipher.encryptor()
     padder = padding.PKCS7(algorithms.AES.block_size).padder()
     padded_data = padder.update(plaintext.encode()) + padder.finalize()
@@ -35,7 +37,7 @@ def decrypt_message(key, ciphertext):
     """Decrypt a message using AES in CBC mode."""
     iv = ciphertext[:16]
     ciphertext = ciphertext[16:]
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
     decryptor = cipher.decryptor()
     padded_data = decryptor.update(ciphertext) + decryptor.finalize()
     unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
@@ -61,7 +63,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Diffie-Hellman key exchange setup
-    parameters = dh.generate_parameters(generator=2, key_size=2048)
+    parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
     client_private_key = parameters.generate_private_key()
     client_public_key = client_private_key.public_key()
 
@@ -71,7 +73,7 @@ if __name__ == '__main__':
 
     # Receive server's public key
     server_public_bytes = client.recv().encode()
-    server_public_key = serialization.load_pem_public_key(server_public_bytes)
+    server_public_key = serialization.load_pem_public_key(server_public_bytes, backend=default_backend())
 
     # Send client's public key to the server
     client_public_bytes = client_public_key.public_bytes(Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
