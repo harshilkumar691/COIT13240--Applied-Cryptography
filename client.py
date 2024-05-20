@@ -73,17 +73,4 @@ if __name__ == '__main__':
 
     # Receive server's public key
     server_public_bytes = client.recv().encode()
-    server_public_key = serialization.load_pem_public_key(server_public_bytes, backend=default_backend())
-
-    # Send client's public key to the server
-    client_public_bytes = client_public_key.public_bytes(Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-    client.send(client_public_bytes.decode())
-
-    # Generate shared key
-    shared_key = client_private_key.exchange(server_public_key)
-    key = derive_key(shared_key)
-
-    # Handle client-server protocol
-    client_protocol(client, key)
-    
-    client.close()
+   
