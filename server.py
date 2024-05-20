@@ -1,137 +1,103 @@
-'''
-TCP server for key exchange and authenticated encryption
-'''
 import argparse
-from tcpclientserver import TCPServer
 import logging
-import os
-from cryptography.hazmat.primitives.asymmetric import dh
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_public_key
+from tcpclientserver import TCPServer
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.kbkdf import CounterLocation
+from cryptography.hazmat.primitives.kdf.kbkdf import KBKDFHMAC
+from cryptography.hazmat.primitives.kdf.kbkdf import Mode
+from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.serialization import Encoding, ParameterFormat
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.padding import PKCS7
-from cryptography.hazmat.backends import default_backend
+import os
 
 logger = logging.getLogger("DEMO_SERVER")
 
-# Function to perform Diffie-Hellman key exchange and return the shared secret key
-def diffie_hellman_key_exchange(server):
-    parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
-    server_private_key = parameters.generate_private_key()
-    server_public_key = server_private_key.public_key()
+def derive_key(shared_key: bytes) -> bytes:
+    """Derive a secure key from the shared key using HKDF."""
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b'handshake data',
+    )
+    return hkdf.derive(shared_key)
 
-    server_public_key_bytes = server_public_key.public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
-    server.send(server_public_key_bytes.decode())
-
-    client_public_key_bytes = server.recv().encode()
-    client_public_key = load_pem_public_key(client_public_key_bytes, backend=default_backend())
-
-    shared_key = server_private_key.exchange(client_public_key)
-    derived_key = HKDF(algorithm=SHA256(), length=32, salt=None, info=b'handshake data', backend=default_backend()).derive(shared_key)
-
-    return derived_key
-
-# Function to encrypt a message using AES
-def encrypt_message(key, message):
+def encrypt_message(key, plaintext):
+    """Encrypt a message using AES in CBC mode."""
     iv = os.urandom(16)
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
     encryptor = cipher.encryptor()
-    padder = PKCS7(algorithms.AES.block_size).padder()
-    padded_data = padder.update(message.encode()) + padder.finalize()
+    padder = padding.PKCS7(algorithms.AES.block_size).padder()
+    padded_data = padder.update(plaintext.encode()) + padder.finalize()
     ciphertext = encryptor.update(padded_data) + encryptor.finalize()
     return iv + ciphertext
 
-# Function to decrypt a message using AES
 def decrypt_message(key, ciphertext):
+    """Decrypt a message using AES in CBC mode."""
     iv = ciphertext[:16]
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    ciphertext = ciphertext[16:]
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
     decryptor = cipher.decryptor()
-    unpadder = PKCS7(algorithms.AES.block_size).unpadder()
-    padded_data = decryptor.update(ciphertext[16:]) + decryptor.finalize()
+    padded_data = decryptor.update(ciphertext) + decryptor.finalize()
+    unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
     plaintext = unpadder.update(padded_data) + unpadder.finalize()
     return plaintext.decode()
 
-def server_protocol(server, shared_key):
-    '''
-    Process the received request and create a response
-    :param server: socket used by server
-    :param shared_key: AES key used for encryption/decryption
-    :returns: Message to be sent to client
-    '''
+def server_protocol(server, key):
+    details = {"name": None, "id": None, "unit": None}
+    
+    prompts = [("name", "Enter name:"), ("id", "Enter ID number:"), ("unit", "Enter unit name:")]
 
-    prompts = ["name:", "id number:", "unit name:"]
-    responses = {}
+    for field, prompt in prompts:
+        server.send(encrypt_message(key, prompt))
+        response = decrypt_message(key, server.recv())
+        if not response:
+            server.send(encrypt_message(key, f"Please enter your {field}."))
+            response = decrypt_message(key, server.recv())
+        details[field] = response
+        logger.debug(f"Received {field}: {response}")
 
-    for prompt in prompts:
-        while True:
-            # Send prompt to client
-            tx_message = "PROMPT:" + prompt
-            encrypted_tx_message = encrypt_message(shared_key, tx_message)
-            server.send(encrypted_tx_message.hex())
+    with open("students.txt", "a") as file:
+        file.write(f"Name: {details['name']}, ID: {details['id']}, Unit: {details['unit']}\n")
 
-            # Receive response from client
-            encrypted_rx_message = bytes.fromhex(server.recv())
-            rx_message = decrypt_message(shared_key, encrypted_rx_message)
-            rx_message_fields = rx_message.split(":")
-            rx_message_type = rx_message_fields[0]
-            rx_message_data = rx_message_fields[1].strip()
-            logger.debug("Received: %s", rx_message)
-
-            if rx_message_type != "RESPONSE":
-                logger.error("Received unknown or incorrect message type: %s", rx_message_type)
-                return 1
-
-            if rx_message_data:
-                responses[prompt] = rx_message_data
-                break
-            else:
-                # Notify client to enter the details for the empty field
-                tx_message = "PROMPT:Please enter " + prompt
-                encrypted_tx_message = encrypt_message(shared_key, tx_message)
-                server.send(encrypted_tx_message.hex())
-
-    # Append details to a file
-    with open("student_details.txt", "a") as file:
-        file.write(f"name: {responses['name:']}\n")
-        file.write(f"id number: {responses['id number:']}\n")
-        file.write(f"unit name: {responses['unit name:']}\n\n")
-
-    # Send final message to client
-    final_message = f"INFO:{responses['name:']} has been added to the unit {responses['unit name:']}."
-    encrypted_final_message = encrypt_message(shared_key, final_message)
-    server.send(encrypted_final_message.hex())
-
-    return 0
+    confirmation_msg = f"{details['name']} has been added to the unit {details['unit']}."
+    server.send(encrypt_message(key, confirmation_msg))
+    logger.debug(confirmation_msg)
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-
-    # Read the command line arguments using argparse module
     parser = argparse.ArgumentParser()
-
-    # Add command line arguments
     parser.add_argument("port", type=int, help="port of server")
-
-    # Read and parse the command line arguments
     args = parser.parse_args()
 
-    # Create a TCPServer object
+    # Diffie-Hellman key exchange setup
+    parameters = dh.generate_parameters(generator=2, key_size=2048)
+    server_private_key = parameters.generate_private_key()
+    server_public_key = server_private_key.public_key()
+    
     server = TCPServer()
-
-    # Specify the port for the server to listen on
     server.listen(args.port)
+    logger.info(f"Server listening on port {args.port}")
 
-    # The server continues forever, accepting connections from clients
     while True:
-        # Blocks until client initiates a connection
         server.accept()
+        logger.info("Client connected.")
+        
+        # Send server's public key to the client
+        server_public_bytes = server_public_key.public_bytes(Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        server.send(server_public_bytes.decode())
 
-        # Perform Diffie-Hellman key exchange
-        shared_key = diffie_hellman_key_exchange(server)
-
-        # Process messages
-        server_protocol(server, shared_key)
-
-        # Close the data socket and wait for more clients to connect
+        # Receive client's public key
+        client_public_bytes = server.recv().encode()
+        client_public_key = serialization.load_pem_public_key(client_public_bytes)
+        
+        # Generate shared key
+        shared_key = server_private_key.exchange(client_public_key)
+        key = derive_key(shared_key)
+        
+        # Handle client-server protocol
+        server_protocol(server, key)
+        
         server.close()
