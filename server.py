@@ -105,3 +105,33 @@ def server_protocol(server, shared_key):
     return 0
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
+
+    # Read the command line arguments using argparse module
+    parser = argparse.ArgumentParser()
+
+    # Add command line arguments
+    parser.add_argument("port", type=int, help="port of server")
+
+    # Read and parse the command line arguments
+    args = parser.parse_args()
+
+    # Create a TCPServer object
+    server = TCPServer()
+
+    # Specify the port for the server to listen on
+    server.listen(args.port)
+
+    # The server continues forever, accepting connections from clients
+    while True:
+        # Blocks until client initiates a connection
+        server.accept()
+
+        # Perform Diffie-Hellman key exchange
+        shared_key = diffie_hellman_key_exchange(server)
+
+        # Process messages
+        server_protocol(server, shared_key)
+
+        # Close the data socket and wait for more clients to connect
+        server.close()
