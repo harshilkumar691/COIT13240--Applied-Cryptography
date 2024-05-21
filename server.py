@@ -73,11 +73,12 @@ def server_protocol(server):
             server.send(tx_message.hex())
 
             # Receive response from client
-            encrypted_rx_message = bytes.fromhex(server.recv())
+            encrypted_rx_message = server.recv()
             if encrypted_rx_message is None:
                 logger.error("Failed to receive client's response")
                 return 1
 
+            encrypted_rx_message = bytes.fromhex(encrypted_rx_message)
             rx_message = decrypt_message(derived_key, encrypted_rx_message)
             rx_message_fields = rx_message.split(":")
             rx_message_type = rx_message_fields[0]
