@@ -3,7 +3,9 @@ TCP Client and Server sockets
 '''
 import socket
 import struct
+import logging
 
+logger = logging.getLogger("TCP_CLIENT_SERVER")
 
 class TCPClientServer:
     '''
@@ -21,16 +23,20 @@ class TCPClientServer:
         self.MSG_LENGTH_BYTES = 4
 
     def send(self, data):
-        '''Send data preceeded by the length of that data'''
+        '''Send data preceded by the length of that data'''
         length = len(data)
+        logger.debug(f"Sending data of length {length}")
         self.data_socket.sendall(struct.pack('!I', length))
-        self.data_socket.sendall(data.encode('utf-8'))
+        self.data_socket.sendall(data)
 
     def recv(self):
         '''Receive the data length followed by the actual data'''
         lengthbuf = self.recvall(self.MSG_LENGTH_BYTES)
+        if not lengthbuf:
+            return None
         length, = struct.unpack('!I', lengthbuf)
-        return self.recvall(length).decode('utf-8')
+        logger.debug(f"Receiving data of length {length}")
+        return self.recvall(length)
 
     def recvall(self, count):
         '''Receive data on a socket of specified length'''
@@ -85,8 +91,8 @@ class TCPServer(TCPClientServer):
 
     def accept(self):
         '''Accept a connection from a client'''
-        (self.data_socket, (self.client_ip, self.client_port)
-         ) = self.listen_socket.accept()
+        self.data_socket, (self.client_ip, self.client_port) = self.listen_socket.accept()
+        logger.debug(f"Accepted connection from {self.client_ip}:{self.client_port}")
 
     def close(self):
         '''Close the data socket at server'''
