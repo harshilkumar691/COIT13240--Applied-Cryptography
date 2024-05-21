@@ -49,7 +49,8 @@ def server_protocol(server):
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
-    server.send(server_public_bytes.decode('utf-8'))
+    logger.debug(f"Server public key: {server_public_bytes}")
+    server.send(server_public_bytes)
 
     # Receive client's public key
     client_public_bytes = server.recv()
@@ -57,11 +58,13 @@ def server_protocol(server):
         logger.error("Failed to receive client's public key")
         return 1
 
-    client_public_key = serialization.load_pem_public_key(client_public_bytes.encode('utf-8'), backend=default_backend())
+    logger.debug(f"Received client public key: {client_public_bytes}")
+    client_public_key = serialization.load_pem_public_key(client_public_bytes, backend=default_backend())
 
     # Generate shared secret
     shared_key = server_private_key.exchange(client_public_key)
     derived_key = derive_key(shared_key)
+    logger.debug(f"Derived key: {derived_key}")
 
     prompts = ["name:", "id number:", "unit name:"]
     responses = {}
@@ -70,7 +73,7 @@ def server_protocol(server):
         while True:
             # Send prompt to client
             tx_message = encrypt_message(derived_key, "PROMPT:" + prompt)
-            server.send(tx_message.hex())
+            server.send(tx_message)
 
             # Receive response from client
             encrypted_rx_message = server.recv()
@@ -78,15 +81,14 @@ def server_protocol(server):
                 logger.error("Failed to receive client's response")
                 return 1
 
-            encrypted_rx_message = bytes.fromhex(encrypted_rx_message)
             rx_message = decrypt_message(derived_key, encrypted_rx_message)
             rx_message_fields = rx_message.split(":")
             rx_message_type = rx_message_fields[0]
             rx_message_data = rx_message_fields[1].strip()
-            logger.debug("Received: %s", rx_message)
+            logger.debug(f"Received: {rx_message}")
 
             if rx_message_type != "RESPONSE":
-                logger.error("Received unknown or incorrect message type: %s", rx_message_type)
+                logger.error("Received unknown or incorrect message type: {rx_message_type}")
                 return 1
 
             if rx_message_data:
@@ -94,7 +96,7 @@ def server_protocol(server):
                 break
             else:
                 # Notify client to enter the details for the empty field
-                server.send(encrypt_message(derived_key, "PROMPT:Please enter " + prompt).hex())
+                server.send(encrypt_message(derived_key, "PROMPT:Please enter " + prompt))
 
     # Write details to a file
     with open("student_details.txt", "w") as file:
@@ -103,7 +105,7 @@ def server_protocol(server):
 
     # Send final message to client
     tx_message = encrypt_message(derived_key, f"INFO:{responses['name:']} has been added to the unit {responses['unit name:']}.")
-    server.send(tx_message.hex())
+    server.send(tx_message)
 
     return 0
 
