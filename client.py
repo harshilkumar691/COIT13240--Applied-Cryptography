@@ -45,10 +45,11 @@ def client_protocol(client, server_ip, server_port):
         logger.error("Failed to receive server's public key")
         return 1
 
-    server_public_key = serialization.load_pem_public_key(server_public_bytes.encode('utf-8'), backend=default_backend())
+    logger.debug(f"Received server public key: {server_public_bytes}")
+    server_public_key = serialization.load_pem_public_key(server_public_bytes, backend=default_backend())
 
     # Generate client's private key
-    parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
+    parameters = server_public_key.parameters()
     client_private_key = parameters.generate_private_key()
     client_public_key = client_private_key.public_key()
 
@@ -57,11 +58,13 @@ def client_protocol(client, server_ip, server_port):
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     )
-    client.send(client_public_bytes.decode('utf-8'))
+    client.send(client_public_bytes)
+    logger.debug(f"Sent client public key: {client_public_bytes}")
 
     # Generate shared secret
     shared_key = client_private_key.exchange(server_public_key)
     derived_key = derive_key(shared_key)
+    logger.debug(f"Derived key: {derived_key}")
 
     while True:
         # Receive prompt from server
@@ -70,12 +73,11 @@ def client_protocol(client, server_ip, server_port):
             logger.error("Failed to receive server's message")
             return 1
 
-        encrypted_rx_message = bytes.fromhex(encrypted_rx_message)
         rx_message = decrypt_message(derived_key, encrypted_rx_message)
         rx_message_fields = rx_message.split(":")
         rx_message_type = rx_message_fields[0]
         rx_message_data = rx_message_fields[1]
-        logger.debug("Received: %s", rx_message)
+        logger.debug(f"Received: {rx_message}")
 
         if rx_message_type == "PROMPT":
             # Get user input
@@ -83,12 +85,12 @@ def client_protocol(client, server_ip, server_port):
 
             # Send response to server
             tx_message = encrypt_message(derived_key, "RESPONSE:" + user_response)
-            client.send(tx_message.hex())
+            client.send(tx_message)
         elif rx_message_type == "INFO":
             print(rx_message_data)
             break
         else:
-            logger.error("Received unknown or incorrect message type: %s", rx_message_type)
+            logger.error("Received unknown or incorrect message type: {rx_message_type}")
             return 1
 
     return 0
