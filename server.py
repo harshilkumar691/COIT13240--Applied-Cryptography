@@ -7,26 +7,25 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 logger = logging.getLogger("DEMO_SERVER")
 
 def server_protocol(server):
+    def derive_key(shared_key):
+        return HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,  # AES key size is 256 bits (32 bytes)
+            salt=None,
+            info=b'handshake data',
+            backend=default_backend()
+        ).derive(shared_key)
+
     prompts = ["name:", "id number:", "unit name:"]
     responses = {}
 
-    # Diffie-Hellman key exchange
-    parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
-    private_key = parameters.generate_private_key()
-    public_key = private_key.public_key()
-    server_public_bytes = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    )
-    server.send(server_public_bytes)
-
-    client_public_bytes = server.recv()
-    client_public_key = serialization.load_pem_public_key(client_public_bytes, backend=default_backend())
-    shared_key = private_key.exchange(client_public_key)
+    # Key derivation
+    shared_key = derive_key(server.recv())
 
     cipher = Cipher(algorithms.AES(shared_key), modes.CTR(), backend=default_backend())
     encryptor = cipher.encryptor()
