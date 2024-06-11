@@ -14,6 +14,11 @@ import os
 
 logger = logging.getLogger("DEMO_SERVER")
 
+#def log_key(key, filename="server_key_log.txt"):
+ #   with open(filename, "a") as log_file:
+  #      log_file.write(f"{key.hex()}\n")
+   # print(f"Logged server key to {filename}")
+    
 def derive_key(shared_key):
     return HKDF(
         algorithm=hashes.SHA256(),
@@ -64,6 +69,7 @@ def server_protocol(server):
     # Generate shared secret
     shared_key = server_private_key.exchange(client_public_key)
     derived_key = derive_key(shared_key)
+    #log_key(derived_key)
     logger.debug(f"Derived key: {derived_key}")
 
     prompts = ["name:", "id number:", "unit name:"]
